@@ -6,6 +6,7 @@ use std::{
 };
 
 use log::{debug, error, info};
+use rand::Rng;
 use std::io::Result as IoResult;
 use tokio::{net::UdpSocket, sync::oneshot};
 
@@ -113,9 +114,9 @@ impl Server {
         let extra_headers = Arc::new(
             this.headers
                 .iter()
-                .map(|(name, value)| format!("{}: {}", name, value))
+                .map(|(name, value)| format!("{}: {}\r\n", name, value))
                 .collect::<Vec<_>>()
-                .join("\r\n"),
+                .join("")
         );
 
         let server_fut = async move {
@@ -276,7 +277,7 @@ impl Server {
         let response = format!(
             concat!(
                 "HTTP/1.1 200 OK\r\n",
-                "CACHE-CONTROL: max-age=100\r\n",
+                "CACHE-CONTROL: max-age={max_age}\r\n",
                 "DATE: {date}\r\n",
                 "EXT:\r\n",
                 "LOCATION: {loc}\r\n",
@@ -286,6 +287,7 @@ impl Server {
                 "{headers}",
                 "\r\n"
             ),
+            max_age = self.max_age,
             date = httpdate::fmt_http_date(SystemTime::now()),
             loc = device.location,
             server = self.server_name.as_deref().unwrap_or(DEFAULT_SERVER_NAME),
@@ -298,7 +300,14 @@ impl Server {
 
         tokio::spawn(async move {
             if mx > 0 {
-                tokio::time::sleep(Duration::from_secs(mx as u64)).await;
+                // upnp specification advises to use a number less than 5 if it is bigger than 5
+                mx = mx.min(5);
+                // wait a random time up to mx
+                let wait = {
+                    let mut rng = rand::thread_rng();
+                    rng.gen_range(0..mx)
+                };
+                tokio::time::sleep(Duration::from_secs(wait as u64)).await;
             }
             if let Err(e) = socket.send_to(response.as_bytes(), remote_addr).await {
                 error!("Failed to send search response: {}", e);
@@ -317,7 +326,7 @@ impl Server {
                 concat!(
                     "NOTIFY * HTTP/1.1\r\n",
                     "HOST: {ssdp_addr}:{ssdp_port}\r\n",
-                    "CACHE-CONTROL: max-age=100\r\n",
+                    "CACHE-CONTROL: max-age={max_age}\r\n",
                     "LOCATION: {loc}\r\n",
                     "NT: {st}\r\n",
                     "NTS: ssdp:alive\r\n",
@@ -326,6 +335,7 @@ impl Server {
                     "{headers}",
                     "\r\n"
                 ),
+                max_age = self.max_age,
                 ssdp_addr = SSDP_ADDR,
                 ssdp_port = SSDP_PORT,
                 loc = device.location,
